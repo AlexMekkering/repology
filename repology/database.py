@@ -562,6 +562,33 @@ class Database:
         self.cursor.execute('CREATE UNIQUE INDEX ON url_relations(effname, url)')  # we only need url here because we need unique index for concurrent refresh
         self.cursor.execute('CREATE INDEX ON url_relations(url)')
 
+        # github
+        self.cursor.execute("""
+            CREATE MATERIALIZED VIEW github_projects AS
+                SELECT DISTINCT
+                    effname,
+                    lower(match[1]) AS account,
+                    lower(match[2]) AS project
+                FROM
+                (
+                    SELECT DISTINCT
+                        effname,
+                        regexp_matches(homepage, '^https?://github.com/([^/]+)/([^/#?]+)') AS match
+                    FROM packages
+                ) AS tmp
+            WITH DATA
+        """)
+
+        self.cursor.execute("""
+            CREATE TABLE github_tags (
+                account text not null,
+                project text not null,
+                tag text not null
+            )
+        """)
+
+        self.cursor.execute('CREATE UNIQUE INDEX ON github_tags(account, project, tag)')
+
     def Clear(self):
         self.cursor.execute("""DELETE FROM packages""")
         self.cursor.execute("""
@@ -1833,3 +1860,46 @@ class Database:
         return [
             row[0] for row in self.cursor.fetchall()
         ]
+
+    def GetGithubProjects(self):
+        self.cursor.execute(
+            """
+                SELECT DISTINCT
+                    account,
+                    project
+                FROM github_projects
+            """
+        )
+
+        return self.cursor.fetchall()
+
+    def UpdateGithubTags(self, account, project, tags):
+        self.cursor.execute(
+            """
+                DELETE
+                FROM github_tags
+                WHERE account = %s AND project = %s
+            """,
+            (account, project)
+        )
+        self.cursor.executemany(
+            """
+                INSERT
+                INTO github_tags (
+                    account,
+                    project,
+                    tag
+                ) VALUES (
+                    %s,
+                    %s,
+                    %s
+                )
+            """,
+            [
+                (
+                    account,
+                    project,
+                    tag
+                ) for tag in tags
+            ]
+        )
